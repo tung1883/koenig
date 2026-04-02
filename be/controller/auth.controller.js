@@ -3,24 +3,31 @@ require('dotenv').config()
 const db = require('../db')
 const jwt = require('jsonwebtoken')
 const bcrypt = require('bcrypt')
+const crypto = require('crypto')
 
 const queryExec = db.queryExec
 const { errorHandler } = require('./error.controller')
 
 const SESSION_TIME = 2 * 60 * 60 * 1000
 const JWT_SECRET = process.env.JWT_SECRET || process.env.API_KEY
+const RESET_TOKEN_TTL_MS = 15 * 60 * 1000
+const resetTokens = new Map()
 
 exports.signin = async (req, res) => {
     const user = req.body?.user
     const pwd = req.body?.pwd
 
     try {
-        const result = await queryExec('select userID, pwd from user where user=?', [user])
+        const result = await queryExec('select userID, user, pwd, displayName, bio, avatarUrl from user where user=?', [user])
         if (result.length === 0 || !bcrypt.compareSync(pwd, result[0].pwd)) {
             return res.status(401).send("Invalid username or password")
         }
 
         const userID = result[0].userID
+        const profileUser = result[0].user
+        const displayName = result[0].displayName
+        const bio = result[0].bio
+        const avatarUrl = result[0].avatarUrl
         if (!JWT_SECRET) {
             return res.status(500).send('Server auth secret is not configured')
         }
@@ -46,7 +53,7 @@ exports.signin = async (req, res) => {
             sameSite: 'None',
             maxAge: SESSION_TIME
         })
-        res.cookie('user', user, {
+        res.cookie('user', profileUser, {
             secure: true,
             sameSite: 'None',
             maxAge: SESSION_TIME
@@ -58,7 +65,15 @@ exports.signin = async (req, res) => {
         })
 
         return res.send({
-            message: "Login sucessfully", tokenPayload, tokenSignature, userID, user, maxAge: SESSION_TIME
+            message: "Login sucessfully",
+            tokenPayload,
+            tokenSignature,
+            userID,
+            user: profileUser,
+            displayName,
+            bio,
+            avatarUrl,
+            maxAge: SESSION_TIME
         })
     } catch (err) {
         return errorHandler(err, res)
@@ -91,8 +106,14 @@ exports.signup = async (req, res) => {
 exports.resetPassword = async (req, res) => {
     const user = req.body?.user
     const pwd = req.body?.pwd
+    const token = req.body?.token
 
-    if (!user || !pwd) return res.status(400).send('user or pwd is not specified')
+    if (!user || !pwd || !token) return res.status(400).send('user, pwd or reset token is not specified')
+
+    const tokenData = resetTokens.get(user)
+    if (!tokenData || tokenData.token !== token || tokenData.expiresAt < Date.now()) {
+        return res.status(401).send('Invalid or expired reset token')
+    }
 
     const hashedPwd = bcrypt.hashSync(pwd, 8)
     try {
@@ -102,10 +123,38 @@ exports.resetPassword = async (req, res) => {
         }
 
         await queryExec('update user set pwd=? where user=?', [hashedPwd, user])
+        resetTokens.delete(user)
         return res.send({
             message: "Reset password sucessfully"           
         })
     } catch (err) { 
+        return errorHandler(err, res)
+    }
+}
+
+exports.requestPasswordReset = async (req, res) => {
+    const user = req.body?.user
+    if (!user) return res.status(400).send('user is not specified')
+
+    try {
+        const result = await queryExec('select user from user where user=?', [user])
+        if (result.length === 0) {
+            return res.status(404).send('User does not exist')
+        }
+
+        const token = crypto.randomBytes(4).toString('hex')
+        resetTokens.set(user, {
+            token,
+            expiresAt: Date.now() + RESET_TOKEN_TTL_MS
+        })
+        console.log(`[reset-token] user=${user} token=${token}`)
+
+        const payload = { message: 'Reset token generated. Check server logs in development.' }
+        if (process.env.RESET_DEBUG_TOKEN === 'true') {
+            payload.token = token
+        }
+        return res.send(payload)
+    } catch (err) {
         return errorHandler(err, res)
     }
 }

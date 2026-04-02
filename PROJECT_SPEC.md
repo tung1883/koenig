@@ -388,7 +388,7 @@ Last updated: 2026-04-02
 - Command API + authoritative game engine service.
 - Websocket gateway with authenticated handshake.
 - Transactional invite acceptance/finalization.
-- Strict schema validation and centralized error mapping.
+- Strict schema validation and centralized error mapping``.
 
 - Data:
 - Explicit columns for game result semantics.

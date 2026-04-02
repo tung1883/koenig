@@ -8,6 +8,10 @@ var app = require('../app');
 var debug = require('debug')('chess-web-be:server');
 var http = require('http');
 var { Server } = require('socket.io');
+const { getAllowedOrigins } = require('../utils/cors');
+const { extractUserIdFromCookieHeader } = require('../utils/auth');
+const { recordSocketConnection, recordSocketEvent } = require('../observability/metrics');
+const { queryExec } = require('../db');
 require('dotenv').config()
 
 /**
@@ -24,36 +28,63 @@ app.set('port', port);
 let server = http.createServer(app);
 let io = new Server(server, {
   cors: {
-    origin: true,
+    origin: getAllowedOrigins(),
     credentials: true
   }
 });
 app.set('socketio', io)
 
+io.use((socket, next) => {
+  try {
+    const userID = extractUserIdFromCookieHeader(socket.handshake.headers?.cookie || '');
+    if (!userID) return next(new Error('Unauthorized socket'));
+    socket.data.userID = Number(userID);
+    return next();
+  } catch (err) {
+    return next(new Error('Unauthorized socket'));
+  }
+})
+
 /**
  * Listen on provided port, on all network interfaces.
  */
 io.on('connection', (socket) => {
-  console.log('Connected to socket.io')
+  recordSocketConnection(1)
+  recordSocketEvent('connect')
 
   socket.on('join_user', ({ userID }) => {
-    if (!userID) return
-    socket.join(`user:${userID}`)
+    recordSocketEvent('join_user')
+    if (Number(userID) !== Number(socket.data.userID)) return
+    socket.join(`user:${socket.data.userID}`)
   })
 
   socket.on('leave_user', ({ userID }) => {
-    if (!userID) return
-    socket.leave(`user:${userID}`)
+    recordSocketEvent('leave_user')
+    if (Number(userID) !== Number(socket.data.userID)) return
+    socket.leave(`user:${socket.data.userID}`)
   })
 
-  socket.on('join_game', ({ gameID }) => {
+  socket.on('join_game', async ({ gameID }) => {
+    recordSocketEvent('join_game')
     if (!gameID) return
-    socket.join(`game:${gameID}`)
+    try {
+      const games = await queryExec('select gameID from active_game where gameID=? and (wp=? or bp=?)', [gameID, socket.data.userID, socket.data.userID])
+      if (!games?.length) return
+      socket.join(`game:${gameID}`)
+    } catch (_) {
+      // swallow join authorization errors
+    }
   })
 
   socket.on('leave_game', ({ gameID }) => {
+    recordSocketEvent('leave_game')
     if (!gameID) return
     socket.leave(`game:${gameID}`)
+  })
+
+  socket.on('disconnect', () => {
+    recordSocketConnection(-1)
+    recordSocketEvent('disconnect')
   })
 })
 server.listen(port);

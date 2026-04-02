@@ -11,5 +11,6 @@
     "dev:be": "npm run dev -w be",
     "dev:fe": "npm run dev -w fe",
     "install:all": "npm install --workspaces"
-  }
+  },
+  "devDependencies": {}
 }

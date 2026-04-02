@@ -1,5 +1,6 @@
 const { queryExec, checkOkPacket } = require("../db")
 const { errorHandler } = require("./error.controller")
+const { validateAndApplyMove } = require("../services/chess.service")
 
 // Result method: 0 - Checkmate, 1 - Time, 2 - Stalemate, 3 - Resign, 4 - Draw by agreement
 const CLEANUP_RETRY_DELAY_MS = 500
@@ -95,8 +96,8 @@ exports.createActiveGame = async (req, res) => {
 exports.updateActiveGame = async (req, res) => {
     const userID = res?.locals.userID
     const { gameID } = req.params
-    const { result: gameResult, move, time, i1, i2 } = req.body
-    const hasMovePayload = !!move && time !== undefined && i1 !== undefined && i2 !== undefined
+    const { result: gameResult, i1, i2 } = req.body
+    const hasMovePayload = i1 !== undefined && i2 !== undefined
     const hasGameResult = gameResult !== null && gameResult !== undefined
 
     if (!hasMovePayload && !hasGameResult) {
@@ -126,10 +127,21 @@ exports.updateActiveGame = async (req, res) => {
 
         const serverNow = Date.now()
         const computedMoveTime = Math.max(1, serverNow - Number(result[0].started_time || serverNow))
+        const moveRecord = `${Number(i1)},${Number(i2)}`
+
+        let autoResult = null
+        if (hasMovePayload) {
+            const validated = validateAndApplyMove(result[0].record || '', Number(i1), Number(i2))
+            if (!validated.ok) {
+                return res.status(400).send({ error: validated.reason || 'Illegal move' })
+            }
+            autoResult = validated.result
+        }
+
         const update = {
             turn: hasMovePayload ? (userID == result[0].wp ? result[0].bp : result[0].wp) : result[0].turn,
             moveNumber: hasMovePayload ? (result[0].move_number !== null ? result[0].move_number + 1 : 0) : result[0].move_number,
-            record: hasMovePayload ? (result[0].record ? `${result[0].record} ${move}` : move) : result[0].record,
+            record: hasMovePayload ? (result[0].record ? `${result[0].record} ${moveRecord}` : moveRecord) : result[0].record,
             timer: hasMovePayload ? `${result[0].timer} ${computedMoveTime}` : result[0].timer
         }
 
@@ -142,14 +154,19 @@ exports.updateActiveGame = async (req, res) => {
                 i1: Number(i1),
                 i2: Number(i2),
                 timeSpent: Number(computedMoveTime),
-                moveNumber: Number(update.moveNumber)
+                moveNumber: Number(update.moveNumber),
+                record: update.record,
+                turn: Number(update.turn),
+                timer: update.timer,
+                started_time: Number(serverNow)
             })
         }
 
-        if (hasGameResult) {
-            await handleGameFinished({ gameID, gameResult, record: update.record, timer: update.timer })
+        const finalResult = hasGameResult ? gameResult : autoResult
+        if (finalResult) {
+            await handleGameFinished({ gameID, gameResult: finalResult, record: update.record, timer: update.timer })
             emitGameEvent(req, gameID, 'game:end', {
-                result: gameResult
+                result: finalResult
             })
         }
 

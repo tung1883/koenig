@@ -1,4 +1,5 @@
-const { queryExec, checkOkPacket } = require("../db")
+const db = require("../db")
+const { queryExec, checkOkPacket } = db
 const { errorHandler } = require("./error.controller")
 
 const emitUsersEventByApp = (app, userIDs, event, payload) => {
@@ -205,6 +206,82 @@ exports.requestResponse = async (req, res) => {
         return declineRequest(req, res, reqID)
     } catch (err) {
         return errorHandler(err, res)
+    }
+}
+
+exports.acceptRequestAndCreateGame = async (req, res) => {
+    const userID = Number(res.locals.userID)
+    const reqID = Number(req.params.reqID)
+    if (!Number.isInteger(reqID) || reqID <= 0) {
+        return res.status(400).send({ error: 'Invalid request id' })
+    }
+
+    const conn = await new Promise((resolve, reject) => {
+        db.getConnection((err, connection) => (err ? reject(err) : resolve(connection)))
+    })
+
+    const connQuery = (sql, values = []) => new Promise((resolve, reject) => {
+        conn.query(sql, values, (err, result) => (err ? reject(err) : resolve(result)))
+    })
+
+    try {
+        await connQuery('START TRANSACTION')
+        const rows = await connQuery('select reqID, receiver, wp, wu, bp, bu, timer from request where reqID=? for update', [reqID])
+        const request = rows?.[0]
+        if (!request) {
+            await connQuery('ROLLBACK')
+            return res.status(404).send({ error: 'Request not found' })
+        }
+        if (Number(request.receiver) !== userID) {
+            await connQuery('ROLLBACK')
+            return res.status(403).send({ error: 'Only receiver can accept invite' })
+        }
+
+        const gameInsert = await connQuery('insert into game(wp, bp, date) values(?, ?, CURRENT_DATE())', [request.wp, request.bp])
+        const gameID = Number(gameInsert.insertId)
+        const serverNow = Date.now()
+        await connQuery(
+            'insert into active_game(gameID, wp, bp, turn, timer, started_time) values(?, ?, ?, ?, ?, ?)',
+            [gameID, request.wp, request.bp, request.wp, request.timer, serverNow]
+        )
+        await connQuery('insert into drawOffers(gameID) values(?)', [gameID])
+        await connQuery('delete from request where reqID=?', [reqID])
+        await connQuery('COMMIT')
+
+        emitUsersEvent(req, [request.wp, request.bp], 'invite:accepted', {
+            reqID: Number(reqID),
+            gameID,
+            receiver: Number(request.receiver),
+            wp: Number(request.wp),
+            wu: request.wu,
+            bp: Number(request.bp),
+            bu: request.bu,
+            timer: request.timer,
+            startedTime: Number(serverNow)
+        })
+        emitUsersEvent(req, [request.wp, request.bp], 'game:started', {
+            gameID,
+            wp: Number(request.wp),
+            bp: Number(request.bp),
+            turn: Number(request.wp),
+            timer: request.timer,
+            started_time: Number(serverNow),
+            record: null,
+            move_number: null
+        })
+
+        return res.status(200).send({
+            gameID,
+            wp: Number(request.wp),
+            bp: Number(request.bp),
+            timer: request.timer,
+            started_time: Number(serverNow)
+        })
+    } catch (err) {
+        try { await connQuery('ROLLBACK') } catch (_) {}
+        return errorHandler(err, res)
+    } finally {
+        conn.release()
     }
 }
 
