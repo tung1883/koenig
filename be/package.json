@@ -1,0 +1,28 @@
+{
+  "name": "chess-web-be",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node ./bin/www",
+    "dev": "nodemon ./bin/www"
+  },
+  "dependencies": {
+    "bcrypt": "^5.1.0",
+    "cookie-parser": "~1.4.4",
+    "cookie-session": "^2.1.0",
+    "cors": "^2.8.5",
+    "debug": "~2.6.9",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "http-errors": "~1.6.3",
+    "jade": "^0.29.0",
+    "jsonwebtoken": "^9.0.1",
+    "morgan": "^1.10.1",
+    "mysql": "^2.18.1",
+    "mysql2": "^3.11.3",
+    "nodemon": "^3.0.2",
+    "socket.io": "^4.7.2",
+    "ws": "^8.18.0",
+    "wscat": "^5.2.1"
+  }
+}
