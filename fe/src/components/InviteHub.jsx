@@ -1,6 +1,42 @@
 import { useEffect, useState } from "react";
 import { inviteApi } from "../api";
 
+function NumberField({ label, value, min = 0, max = null, onChange }) {
+  const clamp = (next) => {
+    let n = Number(next);
+    if (Number.isNaN(n)) n = min;
+    if (typeof min === "number") n = Math.max(min, n);
+    if (typeof max === "number") n = Math.min(max, n);
+    return n;
+  };
+
+  const stepBy = (delta) => onChange(clamp(Number(value || 0) + delta));
+
+  return (
+    <label className="number-field">
+      {label}
+      <div className="number-field-wrap">
+        <input
+          type="number"
+          className="number-input-modern"
+          min={min}
+          max={typeof max === "number" ? max : undefined}
+          value={value}
+          onChange={(e) => onChange(clamp(e.target.value))}
+        />
+        <div className="number-stepper">
+          <button type="button" className="number-step-btn" onClick={() => stepBy(1)} aria-label={`Increase ${label}`}>
+            ▲
+          </button>
+          <button type="button" className="number-step-btn" onClick={() => stepBy(-1)} aria-label={`Decrease ${label}`}>
+            ▼
+          </button>
+        </div>
+      </div>
+    </label>
+  );
+}
+
 function InviteHub({ me, users, onGameCreated, socketRef }) {
   const [incoming, setIncoming] = useState([]);
   const [outgoing, setOutgoing] = useState(null);
@@ -205,10 +241,9 @@ function InviteHub({ me, users, onGameCreated, socketRef }) {
       <div className="new-game">
         <div className="panel-head">
           <h2>Invite Player</h2>
-          <p>Create a live game invitation.</p>
         </div>
         <div className="field">
-          <span className="field-label">Opponent</span>
+          <span className="field-label">Opponent:</span>
           <select value={opp} onChange={(e) => setOpp(e.target.value)}>
             <option value="">{available.length ? "Select player" : "No players found"}</option>
             {available.map((u) => (
@@ -244,10 +279,10 @@ function InviteHub({ me, users, onGameCreated, socketRef }) {
           ))}
         </div>
         <div className="timer-grid timer-grid-challenge">
-          <label>Hours<input type="number" min="0" max="23" value={baseHours} onChange={(e) => setBaseHours(Number(e.target.value))} /></label>
-          <label>Minutes<input type="number" min="0" max="59" value={baseMinutes} onChange={(e) => setBaseMinutes(Number(e.target.value))} /></label>
-          <label>Seconds<input type="number" min="0" max="59" value={baseSeconds} onChange={(e) => setBaseSeconds(Number(e.target.value))} /></label>
-          <label>Increment<input type="number" min="0" value={inc} onChange={(e) => setInc(Number(e.target.value))} /></label>
+          <NumberField label="Hours" min={0} max={23} value={baseHours} onChange={setBaseHours} />
+          <NumberField label="Minutes" min={0} max={59} value={baseMinutes} onChange={setBaseMinutes} />
+          <NumberField label="Seconds" min={0} max={59} value={baseSeconds} onChange={setBaseSeconds} />
+          <NumberField label="Increment" min={0} value={inc} onChange={setInc} />
         </div>
         {msg ? <div className="success-box">{msg}</div> : null}
         {err ? <div className="error-box">{String(err)}</div> : null}

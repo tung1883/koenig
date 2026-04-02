@@ -665,7 +665,7 @@ function App() {
                     onStartResize={startResize}
                 />
 
-                <aside className="side-panel">
+                <aside className={`side-panel ${game ? "side-panel--game" : "side-panel--invite"}`}>
                     {game ? (
                         <GameSidebar
                             game={game}
