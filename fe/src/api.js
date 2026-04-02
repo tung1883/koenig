@@ -5,6 +5,9 @@ if (!API_BASE_URL) {
   throw new Error("Missing VITE_API_URL. Create fe/.env from fe/.env.example.");
 }
 
+const isAbsoluteApiUrl = /^https?:\/\//i.test(API_BASE_URL);
+export const SOCKET_BASE_URL = import.meta.env.VITE_SOCKET_URL || (isAbsoluteApiUrl ? API_BASE_URL : window.location.origin);
+
 export const api = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true

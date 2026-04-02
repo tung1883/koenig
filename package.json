@@ -7,10 +7,12 @@
     "fe"
   ],
   "scripts": {
-    "dev": "npm run dev --workspaces --if-present --parallel",
+    "dev": "concurrently -n be,fe -c cyan,magenta \"npm run dev -w be\" \"npm run dev -w fe\"",
     "dev:be": "npm run dev -w be",
     "dev:fe": "npm run dev -w fe",
     "install:all": "npm install --workspaces"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
 }

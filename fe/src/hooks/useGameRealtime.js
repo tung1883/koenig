@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { io } from "socket.io-client";
-import { API_BASE_URL, activeGameApi } from "../api";
+import { SOCKET_BASE_URL, activeGameApi } from "../api";
 
 function useGameRealtime({
   me,
@@ -18,9 +18,15 @@ function useGameRealtime({
 
   useEffect(() => {
     if (!me) return undefined;
-    const socket = io(API_BASE_URL, {
+    const socket = io(SOCKET_BASE_URL, {
       withCredentials: true,
-      transports: ["websocket"]
+      path: "/socket.io",
+      transports: ["websocket", "polling"],
+      timeout: 20000,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 500,
+      reconnectionDelayMax: 5000
     });
     const joinUser = () => socket.emit("join_user", { userID: Number(me.userID) });
     socketRef.current = socket;
@@ -95,7 +101,11 @@ function useGameRealtime({
     };
     const onEnd = (payload) => {
       if (Number(payload?.gameID) !== gameID) return;
-      openResultModal(payload?.result, game);
+      openResultModal(payload?.result, {
+        gameID,
+        wp: game?.wp,
+        bp: game?.bp
+      });
       setGame(null);
       setStatus("");
     };
@@ -143,7 +153,8 @@ function useGameRealtime({
   }, [
     me?.userID,
     game?.gameID,
-    game,
+    game?.wp,
+    game?.bp,
     clearSession,
     openResultModal,
     playMoveSound,

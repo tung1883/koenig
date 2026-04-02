@@ -30,7 +30,9 @@ let io = new Server(server, {
   cors: {
     origin: getAllowedOrigins(),
     credentials: true
-  }
+  },
+  pingInterval: 25000,
+  pingTimeout: 60000
 });
 app.set('socketio', io)
 
