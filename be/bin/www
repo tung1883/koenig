@@ -12,6 +12,7 @@ const { getAllowedOrigins } = require('../utils/cors');
 const { extractUserIdFromCookieHeader } = require('../utils/auth');
 const { recordSocketConnection, recordSocketEvent } = require('../observability/metrics');
 const { queryExec } = require('../db');
+const { validateAndApplyMove } = require('../services/chess.service');
 require('dotenv').config()
 
 /**
@@ -35,6 +36,35 @@ let io = new Server(server, {
   pingTimeout: 60000
 });
 app.set('socketio', io)
+
+const FINALIZE_CLEANUP_DELAY_MS = 600
+
+const makeAck = (ack) => (typeof ack === 'function' ? ack : () => {})
+
+const finalizeGame = async ({ gameID, result, record, timer }) => {
+  await queryExec('update active_game set result=? where gameID=?', [result, gameID])
+  await queryExec('update game set result=?, record=?, timer=? where gameID=?', [result, record, timer, gameID])
+  setTimeout(async () => {
+    try {
+      await queryExec('delete from drawOffers where gameID=?', [gameID])
+      await queryExec('delete from active_game where gameID=?', [gameID])
+    } catch (_) {
+      // swallow cleanup errors
+    }
+  }, FINALIZE_CLEANUP_DELAY_MS)
+}
+
+const emitGameEvent = (gameID, event, payload = {}) => {
+  io.to(`game:${gameID}`).emit(event, {
+    gameID: Number(gameID),
+    ...payload
+  })
+}
+
+const isPlayerInGame = (gameRow, userID) => {
+  if (!gameRow) return false
+  return Number(gameRow.wp) === Number(userID) || Number(gameRow.bp) === Number(userID)
+}
 
 io.use((socket, next) => {
   try {
@@ -70,9 +100,18 @@ io.on('connection', (socket) => {
     recordSocketEvent('join_game')
     if (!gameID) return
     try {
-      const games = await queryExec('select gameID from active_game where gameID=? and (wp=? or bp=?)', [gameID, socket.data.userID, socket.data.userID])
+      const games = await queryExec('select * from active_game where gameID=? and (wp=? or bp=?)', [gameID, socket.data.userID, socket.data.userID])
       if (!games?.length) return
       socket.join(`game:${gameID}`)
+      const drawRows = await queryExec('select state from drawOffers where gameID=?', [gameID])
+      const messageRows = await queryExec('select userID, message from message where gameID=?', [gameID])
+      const drawOffer = drawRows?.[0]?.state ? drawRows[0].state.readUInt8(0) : 0
+      socket.emit('game:state', {
+        gameID: Number(gameID),
+        game: games[0],
+        drawOffer: Number(drawOffer),
+        messages: messageRows || []
+      })
     } catch (_) {
       // swallow join authorization errors
     }
@@ -82,6 +121,175 @@ io.on('connection', (socket) => {
     recordSocketEvent('leave_game')
     if (!gameID) return
     socket.leave(`game:${gameID}`)
+  })
+
+  socket.on('game:move:submit', async (payload = {}, ack) => {
+    recordSocketEvent('game:move:submit')
+    const reply = makeAck(ack)
+    const userID = Number(socket.data.userID)
+    const gameID = Number(payload.gameID)
+    const i1 = Number(payload.i1)
+    const i2 = Number(payload.i2)
+    const promotionRaw = String(payload.promotion || '').trim().toLowerCase()
+    const promotion = ['q', 'r', 'b', 'n'].includes(promotionRaw) ? promotionRaw : undefined
+    if (!gameID || !Number.isInteger(i1) || !Number.isInteger(i2)) {
+      return reply({ ok: false, error: 'Invalid move payload' })
+    }
+
+    try {
+      const rows = await queryExec('select wp, bp, record, turn, move_number, timer, result, started_time from active_game where gameID=?', [gameID])
+      const game = rows?.[0]
+      if (!game) return reply({ ok: false, error: 'Game not found' })
+      if (!isPlayerInGame(game, userID)) return reply({ ok: false, error: 'User is not one of the players' })
+      if (game?.result) return reply({ ok: false, error: 'Game already ended' })
+      if (Number(game.turn) !== userID) return reply({ ok: false, error: 'Not the turn of the user' })
+
+      const validated = validateAndApplyMove(game.record || '', i1, i2, promotion)
+      if (!validated.ok) return reply({ ok: false, error: validated.reason || 'Illegal move' })
+
+      const serverNow = Date.now()
+      const computedMoveTime = Math.max(1, serverNow - Number(game.started_time || serverNow))
+      const moveRecord = promotion ? `${i1},${i2},${promotion}` : `${i1},${i2}`
+      const update = {
+        turn: userID === Number(game.wp) ? Number(game.bp) : Number(game.wp),
+        moveNumber: game.move_number !== null ? Number(game.move_number) + 1 : 0,
+        record: game.record ? `${game.record} ${moveRecord}` : moveRecord,
+        timer: game.timer ? `${game.timer} ${computedMoveTime}` : `${computedMoveTime}`
+      }
+
+      await queryExec(
+        'update active_game set record=?, turn=?, move_number=?, timer=?, time_spent=?, i1=?, i2=?, started_time=? where gameID=?',
+        [update.record, update.turn, update.moveNumber, update.timer, computedMoveTime, i1, i2, serverNow, gameID]
+      )
+
+      emitGameEvent(gameID, 'game:move', {
+        i1,
+        i2,
+        promotion: promotion || null,
+        timeSpent: Number(computedMoveTime),
+        moveNumber: Number(update.moveNumber),
+        record: update.record,
+        turn: Number(update.turn),
+        timer: update.timer,
+        started_time: Number(serverNow)
+      })
+
+      if (validated.result) {
+        await finalizeGame({ gameID, result: validated.result, record: update.record, timer: update.timer })
+        emitGameEvent(gameID, 'game:end', { result: validated.result })
+      }
+
+      return reply({ ok: true })
+    } catch (_) {
+      return reply({ ok: false, error: 'Move rejected' })
+    }
+  })
+
+  socket.on('game:result:submit', async (payload = {}, ack) => {
+    recordSocketEvent('game:result:submit')
+    const reply = makeAck(ack)
+    const userID = Number(socket.data.userID)
+    const gameID = Number(payload.gameID)
+    const result = String(payload.result || '').trim()
+    if (!gameID || !result) return reply({ ok: false, error: 'Invalid result payload' })
+
+    try {
+      const rows = await queryExec('select wp, bp, record, timer, result from active_game where gameID=?', [gameID])
+      const game = rows?.[0]
+      if (!game) return reply({ ok: false, error: 'Game not found' })
+      if (!isPlayerInGame(game, userID)) return reply({ ok: false, error: 'User is not one of the players' })
+      if (game?.result) return reply({ ok: false, error: 'Game already ended' })
+
+      await finalizeGame({
+        gameID,
+        result,
+        record: game.record || '',
+        timer: game.timer || ''
+      })
+      emitGameEvent(gameID, 'game:end', { result })
+      return reply({ ok: true })
+    } catch (_) {
+      return reply({ ok: false, error: 'Cannot update game result' })
+    }
+  })
+
+  socket.on('game:draw:submit', async (payload = {}, ack) => {
+    recordSocketEvent('game:draw:submit')
+    const reply = makeAck(ack)
+    const userID = Number(socket.data.userID)
+    const gameID = Number(payload.gameID)
+    const offeringDraw = Number(payload.offeringDraw)
+    if (!gameID || !Number.isInteger(offeringDraw) || offeringDraw < 0 || offeringDraw > 2) {
+      return reply({ ok: false, error: 'Invalid draw payload' })
+    }
+
+    try {
+      const gameRows = await queryExec('select wp, bp, record, timer from active_game where gameID=?', [gameID])
+      const game = gameRows?.[0]
+      if (!game) return reply({ ok: false, error: 'Game not found' })
+      if (!isPlayerInGame(game, userID)) return reply({ ok: false, error: 'Not user game' })
+
+      const stateRows = await queryExec('select state from drawOffers where gameID=?', [gameID])
+      const state = stateRows?.[0]?.state ? stateRows[0].state.readUInt8(0) : 0
+      const wp = Number(game.wp)
+      const bp = Number(game.bp)
+
+      if (state === 0 && offeringDraw > 0) {
+        await queryExec('update drawOffers set state=? where gameID=?', [offeringDraw, gameID])
+        emitGameEvent(gameID, 'game:draw', { drawOffer: Number(offeringDraw) })
+        return reply({ ok: true })
+      }
+
+      if (state === 0) return reply({ ok: true })
+
+      const isAccepting =
+        (offeringDraw > 0 && userID === wp && state === 2) ||
+        (offeringDraw > 0 && userID === bp && state === 1)
+      if (isAccepting) {
+        const drawResult = '0, 4'
+        await queryExec("update drawOffers set state=b'11' where gameID=?", [gameID])
+        await finalizeGame({ gameID, result: drawResult, record: game.record || '', timer: game.timer || '' })
+        emitGameEvent(gameID, 'game:draw', { drawOffer: 3 })
+        emitGameEvent(gameID, 'game:end', { result: drawResult })
+        return reply({ ok: true })
+      }
+
+      const isDeclining =
+        (offeringDraw === 0 && userID === wp && state === 1) ||
+        (offeringDraw === 0 && userID === bp && state === 2)
+      if (isDeclining) {
+        await queryExec("update drawOffers set state=b'00' where gameID=?", [gameID])
+        emitGameEvent(gameID, 'game:draw', { drawOffer: 0 })
+      }
+      return reply({ ok: true })
+    } catch (_) {
+      return reply({ ok: false, error: 'Cannot update draw offer' })
+    }
+  })
+
+  socket.on('message:send', async (payload = {}, ack) => {
+    recordSocketEvent('message:send')
+    const reply = makeAck(ack)
+    const userID = Number(socket.data.userID)
+    const gameID = Number(payload.gameID)
+    const message = String(payload.message || '').trim()
+    if (!gameID || !message) return reply({ ok: false, error: 'Invalid message payload' })
+
+    try {
+      const gameRows = await queryExec('select wp, bp from active_game where gameID=?', [gameID])
+      const game = gameRows?.[0]
+      if (!game) return reply({ ok: false, error: 'Game not found' })
+      if (!isPlayerInGame(game, userID)) return reply({ ok: false, error: 'Not user game' })
+
+      await queryExec('insert into message values(?, ?, ?)', [gameID, userID, message])
+      emitGameEvent(gameID, 'message:new', {
+        userID,
+        message
+      })
+      return reply({ ok: true })
+    } catch (_) {
+      return reply({ ok: false, error: 'Failed to send message' })
+    }
   })
 
   socket.on('disconnect', () => {

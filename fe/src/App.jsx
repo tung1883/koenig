@@ -14,7 +14,7 @@ import useGameRealtime from "./hooks/useGameRealtime"
 import useMoveSound from "./hooks/useMoveSound"
 import useTicker from "./hooks/useTicker"
 import useUsersData from "./hooks/useUsersData"
-import { activeGameApi, messageApi, usersApi } from "./api"
+import { activeGameApi, usersApi } from "./api"
 import {
     BOARD_THEMES,
     applyMove,
@@ -22,7 +22,7 @@ import {
     computeClocks,
     getInitialBoard,
     getLegalMoves,
-    indexToCoord,
+    needsPromotionChoice,
     parseGameResult,
     parseRecord,
     sameSide,
@@ -69,6 +69,7 @@ function App() {
     const [profileSaving, setProfileSaving] = useState(false)
     const [avatarUploading, setAvatarUploading] = useState(false)
     const [profileError, setProfileError] = useState("")
+    const [promotionPrompt, setPromotionPrompt] = useState(null)
     const prevRecordLenRef = useRef(0)
     const prevGameIdRef = useRef(null)
     const timeoutSentRef = useRef("")
@@ -113,14 +114,6 @@ function App() {
             setDrawOffer(0)
             return
         }
-        messageApi
-            .getMessages(game.gameID)
-            .then((res) => setChatMessages(Array.isArray(res?.messageList) ? res.messageList : []))
-            .catch(() => {})
-        activeGameApi
-            .getDrawOffer(game.gameID)
-            .then((res) => setDrawOffer(Number(res?.drawOffer || 0)))
-            .catch(() => setDrawOffer(0))
     }, [game?.gameID, me?.userID])
 
     const isWhite = useMemo(() => {
@@ -155,8 +148,8 @@ function App() {
         const clamped = Math.max(0, Math.min(limit, viewPly))
         let next = getInitialBoard()
         for (let i = 0; i < clamped; i += 1) {
-            const [from, to] = activeMoves[i]
-            next = applyMove(next, from, to)
+            const [from, to, promotion] = activeMoves[i]
+            next = applyMove(next, from, to, activeMoves.slice(0, i), promotion)
         }
         setBoard(next)
     }, [game?.gameID, activeMoves, viewPly])
@@ -295,11 +288,43 @@ function App() {
         setStatus,
         setDrawOffer,
         setChatMessages,
-        setMe,
-        clearSession,
         openResultModal,
         playMoveSound,
     })
+
+    const emitSocketAck = useCallback((event, payload) => {
+        return new Promise((resolve, reject) => {
+            const socket = socketRef.current
+            if (!socket) {
+                reject(new Error("Realtime connection unavailable."))
+                return
+            }
+            if (typeof socket.timeout === "function") {
+                socket.timeout(6000).emit(event, payload, (err, response) => {
+                    if (err) {
+                        reject(new Error("Realtime request timed out. Please reconnect."))
+                        return
+                    }
+                    if (response?.ok) resolve(response)
+                    else reject(new Error(response?.error || "Request rejected"))
+                })
+                return
+            }
+            let settled = false
+            const timeoutId = setTimeout(() => {
+                if (settled) return
+                settled = true
+                reject(new Error("Realtime request timed out. Please reconnect."))
+            }, 6000)
+            socket.emit(event, payload, (response) => {
+                if (settled) return
+                settled = true
+                clearTimeout(timeoutId)
+                if (response?.ok) resolve(response)
+                else reject(new Error(response?.error || "Request rejected"))
+            })
+        })
+    }, [socketRef])
 
     useEffect(() => {
         if (!game?.gameID) return
@@ -329,33 +354,43 @@ function App() {
         const winner = whiteToMove ? 0 : 1
         const result = `${winner},1`
         setTimeoutSubmitting(true)
-        activeGameApi
-            .updateActiveGame(game.gameID, {
-                wp: Number(game.wp),
-                bp: Number(game.bp),
-                result,
-            })
+        emitSocketAck("game:result:submit", {
+            gameID: Number(game.gameID),
+            result,
+        })
             .then(() => {
                 openResultModal(result, game)
                 setGame(null)
             })
             .catch(() => {
-                // Another client/server may have finalized already; polling will reconcile.
+                // Another client/server may have finalized already.
             })
             .finally(() => setTimeoutSubmitting(false))
-    }, [game?.gameID, game?.turn, game?.move_number, game?.result, clocks.whiteMs, clocks.blackMs, timeoutSubmitting])
+    }, [game?.gameID, game?.turn, game?.move_number, game?.result, clocks.whiteMs, clocks.blackMs, timeoutSubmitting, emitSocketAck])
 
-    const submitMove = async (from, to) => {
+    const submitMove = async (from, to, promotionChoice) => {
+        const mustChoosePromotion = needsPromotionChoice(board, from, to)
+        if (mustChoosePromotion && !promotionChoice) {
+            setPromotionPrompt({
+                from,
+                to,
+                color: String(board[from]?.[0] || "w"),
+            })
+            return
+        }
+        const promotion = mustChoosePromotion ? String(promotionChoice || "q").toLowerCase() : undefined
+        const currentHistory = activeMoves.slice(0, viewPly)
         if (sandboxMode) {
             setLocalMoves((prev) => {
                 const base = viewPly < prev.length ? prev.slice(0, viewPly) : prev
-                const next = [...base, [from, to]]
+                const next = [...base, [from, to, promotion]]
                 setViewPly(next.length)
                 return next
             })
-            setBoard((prev) => applyMove(prev, from, to))
+            setBoard((prev) => applyMove(prev, from, to, currentHistory, promotion))
             setMoveNumber((prev) => prev + 1)
             playMoveSound()
+            setPromotionPrompt(null)
             return
         }
         if (viewPly !== activeMoves.length) {
@@ -371,14 +406,15 @@ function App() {
             const now = Date.now()
             const elapsed = Math.max(1, now - Number(game.started_time || now))
 
-            setBoard((prev) => applyMove(prev, from, to))
+            setBoard((prev) => applyMove(prev, from, to, currentHistory, promotion))
             setMoveNumber((prev) => prev + 1)
             setGame((prev) => {
                 if (!prev) return prev
+                const moveToken = promotion ? `${from},${to},${promotion}` : `${from},${to}`
                 return {
                     ...prev,
                     turn: Number(prev.turn) === Number(prev.wp) ? prev.bp : prev.wp,
-                    record: prev.record ? `${prev.record} ${from},${to}` : `${from},${to}`,
+                    record: prev.record ? `${prev.record} ${moveToken}` : moveToken,
                     timer: prev.timer ? `${prev.timer} ${elapsed}` : `${elapsed}`,
                     started_time: now,
                     i1: from,
@@ -386,22 +422,19 @@ function App() {
                 }
             })
             playMoveSound()
-            setStatus(`Last move: ${indexToCoord(from)} -> ${indexToCoord(to)}`)
+            setPromotionPrompt(null)
 
-            await activeGameApi.updateActiveGame(game.gameID, {
-                wp: Number(game.wp),
-                bp: Number(game.bp),
-                result: null,
-                move: `${from},${to}`,
-                time: elapsed,
-                i1: from,
-                i2: to,
+            await emitSocketAck("game:move:submit", {
+                gameID: Number(game.gameID),
+                i1: Number(from),
+                i2: Number(to),
+                promotion,
             })
         } catch (error) {
             setBoard(prevBoard)
             setGame(prevGame)
             setMoveNumber(prevMoveNum)
-            setStatus(error?.response?.data?.error || error?.response?.data?.message || "Move rejected")
+            setStatus(error?.message || "Move rejected")
         } finally {
             setPending(false)
         }
@@ -507,9 +540,8 @@ function App() {
         try {
             const winner = isWhite ? 0 : 1
             const result = `${winner},3`
-            await activeGameApi.updateActiveGame(game.gameID, {
-                wp: Number(game.wp),
-                bp: Number(game.bp),
+            await emitSocketAck("game:result:submit", {
+                gameID: Number(game.gameID),
                 result,
             })
             openResultModal(result, game)
@@ -528,10 +560,9 @@ function App() {
         try {
             const isWhiteSide = Number(game.wp) === Number(me.userID)
             const offeringDraw = isWhiteSide ? 1 : 2
-            await activeGameApi.updateDrawOffer(game.gameID, {
+            await emitSocketAck("game:draw:submit", {
+                gameID: Number(game.gameID),
                 offeringDraw,
-                wp: Number(game.wp),
-                bp: Number(game.bp),
             })
             setStatus(incomingDraw ? "Draw accepted." : "Draw offered.")
             if (incomingDraw) {
@@ -539,7 +570,7 @@ function App() {
                 setGame(null)
             }
         } catch (error) {
-            setStatus(error?.response?.data?.msg || "Cannot update draw offer.")
+            setStatus(error?.message || "Cannot update draw offer.")
         } finally {
             setDrawing(false)
         }
@@ -565,7 +596,10 @@ function App() {
         setChatLoading(true)
         try {
             const text = chatInput.trim()
-            await messageApi.sendMessage(game.gameID, text)
+            await emitSocketAck("message:send", {
+                gameID: Number(game.gameID),
+                message: text,
+            })
             setChatInput("")
         } catch (error) {
             setStatus("Failed to send chat message.")
@@ -663,6 +697,9 @@ function App() {
                     onPieceMouseDown={onPieceMouseDown}
                     onToggleSettings={() => setBoardSettingsOpen((v) => !v)}
                     onStartResize={startResize}
+                    promotionPrompt={promotionPrompt}
+                    onPromotionPick={(piece) => submitMove(promotionPrompt.from, promotionPrompt.to, piece)}
+                    onPromotionCancel={() => setPromotionPrompt(null)}
                 />
 
                 <aside className={`side-panel ${game ? "side-panel--game" : "side-panel--invite"}`}>

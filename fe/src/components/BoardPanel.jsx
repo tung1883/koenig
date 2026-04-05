@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toRowCol } from "../chess/logic";
 
 function BoardPanel({
@@ -19,7 +19,10 @@ function BoardPanel({
   onSquareClick,
   onPieceMouseDown,
   onToggleSettings,
-  onStartResize
+  onStartResize,
+  promotionPrompt,
+  onPromotionPick,
+  onPromotionCancel
 }) {
   const mainRowRef = useRef(null);
   const [fitSize, setFitSize] = useState(420);
@@ -47,6 +50,29 @@ function BoardPanel({
       window.removeEventListener("resize", update);
     };
   }, [boardScale]);
+
+  const promotionOverlay = useMemo(() => {
+    if (!promotionPrompt || !Number.isInteger(promotionPrompt.to)) return null;
+    const cell = orientedSquares.indexOf(Number(promotionPrompt.to));
+    if (cell < 0 || fitSize <= 0) return null;
+    const square = fitSize / 8;
+    const row = Math.floor(cell / 8);
+    const col = cell % 8;
+    const panelWidth = 170;
+    const panelHeight = 204;
+    let left = col * square + square + 6;
+    if (left + panelWidth > fitSize) left = col * square - panelWidth - 6;
+    if (left < 2) left = 2;
+    let top = row * square;
+    if (top + panelHeight > fitSize) top = fitSize - panelHeight - 2;
+    if (top < 2) top = 2;
+    const color = String(promotionPrompt.color || "w") === "b" ? "b" : "w";
+    return {
+      left,
+      top,
+      color
+    };
+  }, [promotionPrompt, orientedSquares, fitSize]);
 
   return (
     <div className="board-panel-shell" style={{ "--board-fit-size": `${fitSize}px` }}>
@@ -130,6 +156,38 @@ function BoardPanel({
                   top: `${dragPos.y - dragPieceSize / 2}px`
                 }}
               />
+            ) : null}
+            {promotionOverlay ? (
+              <div
+                className="promotion-panel"
+                style={{ left: `${promotionOverlay.left}px`, top: `${promotionOverlay.top}px` }}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                <div className="promotion-title">Promote To</div>
+                <div className="promotion-grid">
+                  {[
+                    { id: "q", label: "Queen" },
+                    { id: "r", label: "Rook" },
+                    { id: "b", label: "Bishop" },
+                    { id: "n", label: "Knight" }
+                  ].map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className="promotion-option"
+                      onClick={() => onPromotionPick(item.id)}
+                      title={item.label}
+                      aria-label={item.label}
+                    >
+                      <img src={`/assets/pieces/${promotionOverlay.color}${item.id}.png`} alt={item.label} draggable={false} />
+                      <span>{item.label}</span>
+                    </button>
+                  ))}
+                </div>
+                <button type="button" className="promotion-cancel" onClick={onPromotionCancel}>
+                  Cancel
+                </button>
+              </div>
             ) : null}
           </div>
         </div>

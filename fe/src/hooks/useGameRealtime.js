@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { io } from "socket.io-client";
-import { SOCKET_BASE_URL, activeGameApi } from "../api";
+import { SOCKET_BASE_URL } from "../api";
 
 function useGameRealtime({
   me,
@@ -9,8 +9,6 @@ function useGameRealtime({
   setStatus,
   setDrawOffer,
   setChatMessages,
-  setMe,
-  clearSession,
   openResultModal,
   playMoveSound
 }) {
@@ -69,35 +67,37 @@ function useGameRealtime({
     if (!socket || !me || !game?.gameID) return undefined;
     const gameID = Number(game.gameID);
 
-    const syncActiveGame = async () => {
-      try {
-        const active = await activeGameApi.getActiveGame();
-        if (active?.game && Number(active.game.gameID) === gameID && !active.game.result) {
-          setGame((prev) => {
-            if ((prev?.record || "") !== (active.game.record || "")) {
-              playMoveSound();
-            }
-            return active.game;
-          });
-          return;
-        }
-        if (active?.game?.result) {
-          openResultModal(active.game.result, active.game);
-        }
-        setGame(null);
-        setStatus("");
-      } catch (error) {
-        if (error?.response?.status === 403) {
-          clearSession();
-          setMe(null);
-          setGame(null);
-        }
-      }
-    };
-
     const onMove = (payload) => {
       if (Number(payload?.gameID) !== gameID) return;
-      syncActiveGame();
+      setGame((prev) => {
+        if (!prev || Number(prev.gameID) !== gameID) return prev;
+        const nextRecord = String(payload?.record || "");
+        if (nextRecord && nextRecord !== String(prev.record || "")) {
+          playMoveSound();
+        }
+        return {
+          ...prev,
+          i1: payload?.i1 ?? prev.i1,
+          i2: payload?.i2 ?? prev.i2,
+          time_spent: payload?.timeSpent ?? prev.time_spent,
+          move_number: payload?.moveNumber ?? prev.move_number,
+          record: payload?.record ?? prev.record,
+          turn: payload?.turn ?? prev.turn,
+          timer: payload?.timer ?? prev.timer,
+          started_time: payload?.started_time ?? prev.started_time
+        };
+      });
+    };
+    const onState = (payload) => {
+      if (Number(payload?.gameID) !== gameID) return;
+      if (payload?.game) {
+        setGame((prev) => {
+          if (!prev || Number(prev.gameID) !== gameID) return payload.game;
+          return { ...prev, ...payload.game };
+        });
+      }
+      setDrawOffer(Number(payload?.drawOffer || 0));
+      setChatMessages(Array.isArray(payload?.messages) ? payload.messages : []);
     };
     const onEnd = (payload) => {
       if (Number(payload?.gameID) !== gameID) return;
@@ -137,6 +137,7 @@ function useGameRealtime({
     const onConnect = () => socket.emit("join_game", { gameID });
     socket.emit("join_game", { gameID });
     socket.on("game:move", onMove);
+    socket.on("game:state", onState);
     socket.on("game:end", onEnd);
     socket.on("game:draw", onDraw);
     socket.on("message:new", onMessage);
@@ -145,6 +146,7 @@ function useGameRealtime({
     return () => {
       socket.emit("leave_game", { gameID });
       socket.off("game:move", onMove);
+      socket.off("game:state", onState);
       socket.off("game:end", onEnd);
       socket.off("game:draw", onDraw);
       socket.off("message:new", onMessage);
@@ -155,13 +157,11 @@ function useGameRealtime({
     game?.gameID,
     game?.wp,
     game?.bp,
-    clearSession,
     openResultModal,
     playMoveSound,
     setChatMessages,
     setDrawOffer,
     setGame,
-    setMe,
     setStatus
   ]);
 

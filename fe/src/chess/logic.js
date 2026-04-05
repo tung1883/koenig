@@ -36,15 +36,46 @@ export function parseRecord(record) {
   return record
     .trim()
     .split(/\s+/)
-    .map((token) => token.split(",").map((n) => Number(n)))
+    .map((token) => {
+      const [fromRaw, toRaw, promotionRaw] = token.split(",");
+      const from = Number(fromRaw);
+      const to = Number(toRaw);
+      const promotion = String(promotionRaw || "").trim().toLowerCase();
+      return [from, to, ["q", "r", "b", "n"].includes(promotion) ? promotion : undefined];
+    })
     .filter(([from, to]) => Number.isInteger(from) && Number.isInteger(to));
 }
 
-export function applyMove(board, from, to) {
+function isEnPassantCapture(board, from, to) {
+  const moving = board[from];
+  if (!moving || moving[1] !== "p") return false;
+  const [fromRow, fromCol] = toRowCol(from);
+  const [toRow, toCol] = toRowCol(to);
+  if (Math.abs(toCol - fromCol) !== 1) return false;
+  if (Math.abs(toRow - fromRow) !== 1) return false;
+  if (board[to]) return false;
+  const captured = board[toIndex(fromRow, toCol)];
+  return Boolean(captured && captured[1] === "p" && captured[0] !== moving[0]);
+}
+
+export function applyMove(board, from, to, historyMoves = [], promotionChoice) {
   const next = [...board];
   const moving = next[from];
+  if (!moving) return next;
+  if (isEnPassantCapture(next, from, to)) {
+    const [fromRow, toCol] = [toRowCol(from)[0], toRowCol(to)[1]];
+    next[toIndex(fromRow, toCol)] = null;
+  }
   next[to] = moving;
   next[from] = null;
+  if (moving[1] === "p") {
+    const [toRow] = toRowCol(to);
+    if ((moving[0] === "w" && toRow === 0) || (moving[0] === "b" && toRow === 7)) {
+      const promotion = String(promotionChoice || "").toLowerCase();
+      const promoteTo = ["q", "r", "b", "n"].includes(promotion) ? promotion : "q";
+      next[to] = `${moving[0]}${promoteTo}`;
+    }
+  }
   if (moving && moving[1] === "k" && Math.abs(to - from) === 2) {
     if (to > from) {
       const rookFrom = from + 3;
@@ -254,10 +285,31 @@ export function getLegalMoves(board, index, historyMoves = []) {
   if (!piece) return [];
   const color = piece[0];
   const pseudo = getPseudoMoves(board, index);
+  if (piece[1] === "p" && historyMoves.length > 0) {
+    const [lastFrom, lastTo] = historyMoves[historyMoves.length - 1];
+    const lastPiece = board[lastTo];
+    if (Number.isInteger(lastFrom) && Number.isInteger(lastTo) && lastPiece?.[1] === "p" && lastPiece[0] !== color) {
+      const [r, c] = toRowCol(index);
+      const [lastFromRow, lastFromCol] = toRowCol(lastFrom);
+      const [lastToRow, lastToCol] = toRowCol(lastTo);
+      const dir = color === "w" ? -1 : 1;
+      const requiredRow = color === "w" ? 3 : 4;
+      if (
+        r === requiredRow &&
+        lastToRow === r &&
+        Math.abs(lastToCol - c) === 1 &&
+        Math.abs(lastToRow - lastFromRow) === 2 &&
+        lastFromCol === lastToCol
+      ) {
+        const epTarget = toIndex(r + dir, lastToCol);
+        if (!board[epTarget]) pseudo.push(epTarget);
+      }
+    }
+  }
   const legal = pseudo.filter((to) => {
     const target = board[to];
     if (target && target[1] === "k") return false;
-    const simulated = applyMove(board, index, to);
+    const simulated = applyMove(board, index, to, historyMoves);
     return !isInCheck(simulated, color);
   });
 
@@ -295,7 +347,8 @@ export function buildNotationEntries(recordMoves) {
   const entries = [];
   let board = getInitialBoard();
 
-  for (const [from, to] of recordMoves) {
+  for (let i = 0; i < recordMoves.length; i += 1) {
+    const [from, to, promotion] = recordMoves[i];
     const piece = board[from];
     if (!piece) continue;
     const target = board[to];
@@ -312,16 +365,25 @@ export function buildNotationEntries(recordMoves) {
       pieceCode = `${color}k`;
       notation = toCol > fromCol ? "O-O" : "O-O-O";
     } else if (type === "p") {
-      notation = target ? `${FILES[fromCol]}x${toSq}` : toSq;
+      const isEp = !target && fromCol !== toCol;
+      notation = target || isEp ? `${FILES[fromCol]}x${toSq}` : toSq;
+      if (promotion) notation += `=${String(promotion).toUpperCase()}`;
     } else {
       pieceCode = `${color}${type}`;
       notation = `${target ? "x" : ""}${toSq}`;
     }
 
     entries.push({ pieceCode, notation });
-    board = applyMove(board, from, to);
+    board = applyMove(board, from, to, recordMoves.slice(0, i), promotion);
   }
   return entries;
+}
+
+export function needsPromotionChoice(board, from, to) {
+  const piece = board[from];
+  if (!piece || piece[1] !== "p") return false;
+  const [toRow] = toRowCol(to);
+  return (piece[0] === "w" && toRow === 0) || (piece[0] === "b" && toRow === 7);
 }
 
 function parseTimerMeta(timerRaw) {

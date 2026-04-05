@@ -934,6 +934,75 @@ textarea {
   gap: 10px;
 }
 
+.promotion-panel {
+  position: absolute;
+  z-index: 25;
+  width: 170px;
+  border: 1px solid #3d4b60;
+  border-radius: 12px;
+  padding: 8px;
+  background: linear-gradient(180deg, #1f2936 0%, #19222e 100%);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38);
+  display: grid;
+  gap: 8px;
+}
+
+.promotion-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #c7d4e3;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.promotion-grid {
+  display: grid;
+  gap: 6px;
+}
+
+.promotion-option {
+  border: 1px solid #344355;
+  border-radius: 9px;
+  background: #14202c;
+  color: #dbe6f3;
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 6px;
+  cursor: pointer;
+}
+
+.promotion-option:hover {
+  background: #1c2b3b;
+  border-color: #4f6782;
+}
+
+.promotion-option img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.promotion-option span {
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.promotion-cancel {
+  border: 1px solid #334355;
+  border-radius: 8px;
+  background: #18222f;
+  color: #cad7e5;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .side-panel {
   padding: 14px;
   display: grid;

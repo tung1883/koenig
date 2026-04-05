@@ -15,15 +15,23 @@ function parseRecord(record) {
   return record
     .trim()
     .split(/\s+/)
-    .map((token) => token.split(",").map((n) => Number(n)))
+    .map((token) => {
+      const [fromRaw, toRaw, promotionRaw] = token.split(",");
+      const from = Number(fromRaw);
+      const to = Number(toRaw);
+      const promotion = String(promotionRaw || "").trim().toLowerCase();
+      return [from, to, ["q", "r", "b", "n"].includes(promotion) ? promotion : undefined];
+    })
     .filter(([from, to]) => Number.isInteger(from) && Number.isInteger(to));
 }
 
-function promotionForMove(chess, from, to) {
+function resolvePromotion(chess, from, to, requestedPromotion) {
   const piece = chess.get(from);
   if (!piece || piece.type !== "p") return undefined;
   const rank = to[1];
   if ((piece.color === "w" && rank === "8") || (piece.color === "b" && rank === "1")) {
+    const requested = String(requestedPromotion || "").trim().toLowerCase();
+    if (["q", "r", "b", "n"].includes(requested)) return requested;
     return "q";
   }
   return undefined;
@@ -32,13 +40,13 @@ function promotionForMove(chess, from, to) {
 function replayRecord(record) {
   const chess = new Chess();
   const moves = parseRecord(record);
-  for (const [fromIdx, toIdx] of moves) {
+  for (const [fromIdx, toIdx, promotion] of moves) {
     const from = indexToSquare(fromIdx);
     const to = indexToSquare(toIdx);
     if (!from || !to) return { ok: false, reason: "Invalid move index in record", chess: null };
     let move = null;
     try {
-      move = chess.move({ from, to, promotion: promotionForMove(chess, from, to) });
+      move = chess.move({ from, to, promotion: resolvePromotion(chess, from, to, promotion) });
     } catch (_) {
       move = null;
     }
@@ -47,7 +55,7 @@ function replayRecord(record) {
   return { ok: true, chess };
 }
 
-function validateAndApplyMove(record, i1, i2) {
+function validateAndApplyMove(record, i1, i2, requestedPromotion) {
   const replay = replayRecord(record);
   if (!replay.ok) return replay;
   const chess = replay.chess;
@@ -56,7 +64,7 @@ function validateAndApplyMove(record, i1, i2) {
   if (!from || !to) return { ok: false, reason: "Invalid move index", chess: null };
   let move = null;
   try {
-    move = chess.move({ from, to, promotion: promotionForMove(chess, from, to) });
+    move = chess.move({ from, to, promotion: resolvePromotion(chess, from, to, requestedPromotion) });
   } catch (_) {
     move = null;
   }

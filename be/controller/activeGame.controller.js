@@ -96,7 +96,10 @@ exports.createActiveGame = async (req, res) => {
 exports.updateActiveGame = async (req, res) => {
     const userID = res?.locals.userID
     const { gameID } = req.params
-    const { result: gameResult, i1, i2 } = req.body
+    const { result: gameResult, i1, i2, promotion: promotionRaw } = req.body
+    const promotion = ['q', 'r', 'b', 'n'].includes(String(promotionRaw || '').trim().toLowerCase())
+        ? String(promotionRaw || '').trim().toLowerCase()
+        : undefined
     const hasMovePayload = i1 !== undefined && i2 !== undefined
     const hasGameResult = gameResult !== null && gameResult !== undefined
 
@@ -127,11 +130,13 @@ exports.updateActiveGame = async (req, res) => {
 
         const serverNow = Date.now()
         const computedMoveTime = Math.max(1, serverNow - Number(result[0].started_time || serverNow))
-        const moveRecord = `${Number(i1)},${Number(i2)}`
+        const moveRecord = promotion
+            ? `${Number(i1)},${Number(i2)},${promotion}`
+            : `${Number(i1)},${Number(i2)}`
 
         let autoResult = null
         if (hasMovePayload) {
-            const validated = validateAndApplyMove(result[0].record || '', Number(i1), Number(i2))
+            const validated = validateAndApplyMove(result[0].record || '', Number(i1), Number(i2), promotion)
             if (!validated.ok) {
                 return res.status(400).send({ error: validated.reason || 'Illegal move' })
             }
@@ -153,6 +158,7 @@ exports.updateActiveGame = async (req, res) => {
             emitGameEvent(req, gameID, 'game:move', {
                 i1: Number(i1),
                 i2: Number(i2),
+                promotion: promotion || null,
                 timeSpent: Number(computedMoveTime),
                 moveNumber: Number(update.moveNumber),
                 record: update.record,
