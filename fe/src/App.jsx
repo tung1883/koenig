@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import AuthCard from "./components/AuthCard"
 import ActionConfirmModal from "./components/ActionConfirmModal"
 import BoardPanel from "./components/BoardPanel"
+import ComputerPlayPage from "./components/ComputerPlayPage"
 import BoardSettingsModal from "./components/BoardSettingsModal"
 import GameSidebar from "./components/GameSidebar"
 import InviteHub from "./components/InviteHub"
 import ProfileModal from "./components/ProfileModal"
 import ResultModal from "./components/ResultModal"
 import TopBar from "./components/TopBar"
+import { useLocation, useNavigate } from "react-router-dom"
 import useAuthSession from "./hooks/useAuthSession"
 import useBoardSettings from "./hooks/useBoardSettings"
 import useGameRealtime from "./hooks/useGameRealtime"
@@ -29,6 +31,9 @@ import {
 } from "./chess/logic"
 
 function App() {
+    const location = useLocation()
+    const navigate = useNavigate()
+    const isComputerPage = location.pathname === "/play/computer"
     const { me, setMe, bootstrappingAuth, logout, clearSession } = useAuthSession()
     const { users, userMap, refreshUsers } = useUsersData(me)
     const [game, setGame] = useState(null)
@@ -76,7 +81,12 @@ function App() {
     const playMoveSound = useMoveSound()
 
     useEffect(() => {
-        if (!me) return
+        if (location.pathname === "/" || location.pathname === "/play/computer") return
+        navigate("/", { replace: true })
+    }, [location.pathname, navigate])
+
+    useEffect(() => {
+        if (!me || isComputerPage) return
         activeGameApi
             .getActiveGame()
             .then((res) => {
@@ -98,7 +108,7 @@ function App() {
                     return
                 }
             })
-    }, [me, clearSession, setMe])
+    }, [me, clearSession, isComputerPage, setMe])
 
     useEffect(() => {
         if (!game) {
@@ -282,8 +292,8 @@ function App() {
     }, [game, me?.userID, userMap])
 
     const socketRef = useGameRealtime({
-        me,
-        game,
+        me: isComputerPage ? null : me,
+        game: isComputerPage ? null : game,
         setGame,
         setStatus,
         setDrawOffer,
@@ -675,60 +685,79 @@ function App() {
 
     return (
         <div className="page">
-            <TopBar me={me} onOpenProfile={openProfile} onRequestLogout={() => setLogoutConfirmOpen(true)} />
+            <TopBar
+                me={me}
+                currentView={isComputerPage ? "computer" : "online"}
+                onNavigateHome={() => navigate("/")}
+                onNavigateComputer={() => navigate("/play/computer")}
+                onOpenProfile={openProfile}
+                onRequestLogout={() => setLogoutConfirmOpen(true)}
+            />
 
-            <main className="layout">
-                <BoardPanel
+            {isComputerPage ? (
+                <ComputerPlayPage
                     theme={theme}
                     boardScale={boardScale}
-                    topPlayer={topPlayer}
-                    bottomPlayer={bottomPlayer}
-                    orientedSquares={orientedSquares}
-                    board={board}
-                    dragFrom={dragFrom}
-                    selected={selected}
-                    legalTargets={legalTargets}
-                    status={status}
-                    resizeState={resizeState}
+                    boardDirection={boardDirection}
                     boardSettingsOpen={boardSettingsOpen}
-                    dragPos={dragPos}
-                    dragPieceSize={dragPieceSize}
-                    onSquareClick={onSquareClick}
-                    onPieceMouseDown={onPieceMouseDown}
-                    onToggleSettings={() => setBoardSettingsOpen((v) => !v)}
-                    onStartResize={startResize}
-                    promotionPrompt={promotionPrompt}
-                    onPromotionPick={(piece) => submitMove(promotionPrompt.from, promotionPrompt.to, piece)}
-                    onPromotionCancel={() => setPromotionPrompt(null)}
+                    resizeState={resizeState}
+                    startResize={startResize}
+                    setBoardSettingsOpen={setBoardSettingsOpen}
                 />
+            ) : (
+                <main className="layout">
+                    <BoardPanel
+                        theme={theme}
+                        boardScale={boardScale}
+                        topPlayer={topPlayer}
+                        bottomPlayer={bottomPlayer}
+                        orientedSquares={orientedSquares}
+                        board={board}
+                        dragFrom={dragFrom}
+                        selected={selected}
+                        legalTargets={legalTargets}
+                        status={status}
+                        resizeState={resizeState}
+                        boardSettingsOpen={boardSettingsOpen}
+                        dragPos={dragPos}
+                        dragPieceSize={dragPieceSize}
+                        onSquareClick={onSquareClick}
+                        onPieceMouseDown={onPieceMouseDown}
+                        onToggleSettings={() => setBoardSettingsOpen((v) => !v)}
+                        onStartResize={startResize}
+                        promotionPrompt={promotionPrompt}
+                        onPromotionPick={(piece) => submitMove(promotionPrompt.from, promotionPrompt.to, piece)}
+                        onPromotionCancel={() => setPromotionPrompt(null)}
+                    />
 
-                <aside className={`side-panel ${game ? "side-panel--game" : "side-panel--invite"}`}>
-                    {game ? (
-                        <GameSidebar
-                            game={game}
-                            notationEntries={notationEntries}
-                            moveNumber={moveNumber}
-                            maxPly={activeMoves.length}
-                            viewPly={viewPly}
-                            drawing={drawing}
-                            resigning={resigning}
-                            outgoingDraw={outgoingDraw}
-                            incomingDraw={incomingDraw}
-                            onOpenConfirm={openConfirm}
-                            onJumpToPly={jumpToPly}
-                            chatMessages={chatMessages}
-                            me={me}
-                            userMap={userMap}
-                            chatInput={chatInput}
-                            onChatInputChange={setChatInput}
-                            onSubmitChat={submitChat}
-                            chatLoading={chatLoading}
-                        />
-                    ) : (
-                        <InviteHub me={me} users={users} onGameCreated={setGame} socketRef={socketRef} />
-                    )}
-                </aside>
-            </main>
+                    <aside className={`side-panel ${game ? "side-panel--game" : "side-panel--invite"}`}>
+                        {game ? (
+                            <GameSidebar
+                                game={game}
+                                notationEntries={notationEntries}
+                                moveNumber={moveNumber}
+                                maxPly={activeMoves.length}
+                                viewPly={viewPly}
+                                drawing={drawing}
+                                resigning={resigning}
+                                outgoingDraw={outgoingDraw}
+                                incomingDraw={incomingDraw}
+                                onOpenConfirm={openConfirm}
+                                onJumpToPly={jumpToPly}
+                                chatMessages={chatMessages}
+                                me={me}
+                                userMap={userMap}
+                                chatInput={chatInput}
+                                onChatInputChange={setChatInput}
+                                onSubmitChat={submitChat}
+                                chatLoading={chatLoading}
+                            />
+                        ) : (
+                            <InviteHub me={me} users={users} onGameCreated={setGame} socketRef={socketRef} />
+                        )}
+                    </aside>
+                </main>
+            )}
             <BoardSettingsModal
                 open={boardSettingsOpen}
                 boardScale={boardScale}
@@ -740,13 +769,15 @@ function App() {
                 onBoardDirectionChange={setBoardDirection}
                 onBoardThemeChange={setBoardTheme}
             />
-            <ActionConfirmModal
-                action={confirmAction}
-                incomingDraw={incomingDraw}
-                onClose={() => setConfirmAction(null)}
-                onConfirm={handleConfirmAction}
-            />
-            <ResultModal result={resultModal} onClose={() => setResultModal(null)} />
+            {!isComputerPage ? (
+                <ActionConfirmModal
+                    action={confirmAction}
+                    incomingDraw={incomingDraw}
+                    onClose={() => setConfirmAction(null)}
+                    onConfirm={handleConfirmAction}
+                />
+            ) : null}
+            {!isComputerPage ? <ResultModal result={resultModal} onClose={() => setResultModal(null)} /> : null}
             <ProfileModal
                 open={profileOpen}
                 me={me}

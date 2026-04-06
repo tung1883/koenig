@@ -252,6 +252,11 @@ textarea {
   height: 34px;
 }
 
+.topbar-nav {
+  display: grid;
+  gap: 8px;
+}
+
 .me {
   color: var(--muted);
   font-size: 13px;
@@ -284,6 +289,10 @@ textarea {
   margin-top: 0;
   flex: 1;
   min-height: 0;
+}
+
+.logout-action-btn {
+  margin-top: auto;
 }
 
 .avatar-wrap {
@@ -1255,6 +1264,37 @@ textarea {
 .move-card {
   height: auto;
   grid-template-rows: auto auto auto auto;
+}
+
+.computer-controls {
+  display: grid;
+  gap: 10px;
+}
+
+.history-nav {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.move-row-variation {
+  align-items: start;
+}
+
+.variation-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 36px;
+}
+
+.move-cell-placeholder {
+  color: var(--muted);
+  padding: 8px 0;
+}
+
+.computer-status-copy {
+  line-height: 1.5;
 }
 
 .chat-card {
